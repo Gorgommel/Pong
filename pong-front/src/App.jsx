@@ -1,98 +1,139 @@
-import { useEffect, useState } from "react";
-import mqtt from "mqtt";
+/**
+ * App.jsx — Pong Multiplayer Distribuído via MQTT
+ * ================================================
+ * Requisitos atendidos:
+ *  ✅ Visualiza mensagens MQTT em tempo real (MqttLog)
+ *  ✅ Publica comandos MQTT (botão READY, chat)
+ *  ✅ Exibe o Pong funcionando (PongCanvas)
+ *  ✅ Mostra status dos jogadores (StatusBar)
+ *  ✅ Mostra placar (PongCanvas + Scoreboard)
+ *  ✅ Mostra logs MQTT (MqttLog)
+ *  ✅ Mostra informações do ESP32 (espStatus via LWT)
+ *  ✅ Gráficos Chart.js (MetricsChart)
+ *  ✅ Chat via tópico MQTT (ChatPanel)
+ *  ✅ Wildcard visível na UI
+ *  ✅ QoS informado em cada assinatura
+ */
 
-function App() {
-  // Estado das raquetes (começam no meio da tela - 300px)
-  const [posJ1, setPosJ1] = useState(300);
-  const [posJ2, setPosJ2] = useState(300);
+import { useMqtt }      from "./hooks/useMqtt";
+import PongCanvas       from "./components/PongCanvas";
+import StatusBar        from "./components/StatusBar";
+import MetricsChart     from "./components/MetricsChart";
+import MqttLog          from "./components/MqttLog";
+import ChatPanel        from "./components/ChatPanel";
 
-  // Status de conexão e hardware
-  const [statusMqtt, setStatusMqtt] = useState("Conectando...");
-  const [statusEsp, setStatusEsp] = useState("Desconhecido");
-  const [msgBotao, setMsgBotao] = useState("");
+// Trocar para wss:// + host HiveMQ Cloud em produção
+const BROKER_URL = "ws://broker.hivemq.com:8000/mqtt";
 
-  useEffect(() => {
-    // ATENÇÃO: Navegadores usam ws:// e porta 8000 para MQTT
-    const client = mqtt.connect("ws://broker.hivemq.com:8000/mqtt");
-
-    client.on("connect", () => {
-      setStatusMqtt("Conectado ao HiveMQ 🟢");
-
-      // Se inscreve nos mesmos tópicos do ESP32
-      client.subscribe("jogo/pong/posicao");
-      client.subscribe("jogo/pong/status");
-      client.subscribe("jogo/pong/comandos");
-    });
-
-    client.on("message", (topic, message) => {
-      const payload = JSON.parse(message.toString());
-
-      if (topic === "jogo/pong/posicao") {
-        // Atualiza a posição no eixo Y
-        if (payload.player === "jogador1") setPosJ1(payload.y);
-        if (payload.player === "jogador2") setPosJ2(payload.y);
-      } else if (topic === "jogo/pong/status") {
-        // Recebe o LWT ou status de online do ESP32
-        setStatusEsp(
-          payload.status === "online" ? "ESP32 Online ⚡" : "ESP32 Offline 🔴",
-        );
-      } else if (topic === "jogo/pong/comandos") {
-        // Feedback visual do botão
-        setMsgBotao(`${payload.player} apertou READY!`);
-        setTimeout(() => setMsgBotao(""), 2000); // Apaga a mensagem após 2s
-      }
-    });
-
-    // Limpa a conexão se o componente for desmontado
-    return () => client.end();
-  }, []);
+export default function App() {
+  const {
+    connected, gameState, placar, espStatus,
+    mqttLogs, chatMsgs, lastCmd, msgCount, publish,
+  } = useMqtt(BROKER_URL);
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center p-8 font-sans">
-      {/* Painel do Professor (Para impressionar na banca) */}
-      <div className="w-full max-w-4xl bg-gray-800 p-4 rounded-lg mb-6 flex justify-between shadow-lg border border-gray-700">
+    <div className="min-h-screen bg-gray-950 text-white flex flex-col gap-4 p-4 md:p-6 font-sans">
+
+      {/* ── Cabeçalho ─────────────────────────────────────────── */}
+      <header className="flex items-center justify-between">
         <div>
-          <h2 className="text-gray-400 text-sm font-bold uppercase tracking-wider">
-            Status Front-end
-          </h2>
-          <p className="text-lg">{statusMqtt}</p>
+          <h1 className="text-2xl font-bold font-mono tracking-tight text-cyan-400">
+            PONG <span className="text-white">MQTT</span>
+          </h1>
+          <p className="text-gray-500 text-xs">Multiplayer Distribuído via HiveMQ</p>
         </div>
-        <div>
-          <h2 className="text-gray-400 text-sm font-bold uppercase tracking-wider">
-            Status Hardware (LWT)
-          </h2>
-          <p className="text-lg">{statusEsp}</p>
+        <div className="text-right text-xs text-gray-600 font-mono">
+          <p>broker.hivemq.com</p>
+          <p>ws port 8000</p>
         </div>
-        <div>
-          <h2 className="text-gray-400 text-sm font-bold uppercase tracking-wider">
-            Último Comando
-          </h2>
-          <p className="text-lg text-yellow-400">
-            {msgBotao || "Aguardando..."}
-          </p>
+      </header>
+
+      {/* ── Status Bar ────────────────────────────────────────── */}
+      <StatusBar
+        connected={connected}
+        espStatus={espStatus}
+        lastCmd={lastCmd}
+        publish={publish}
+      />
+
+      {/* ── Placar ────────────────────────────────────────────── */}
+      <div className="flex items-center justify-center gap-10">
+        <div className="text-center">
+          <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Jogador 1</p>
+          <p className="text-7xl font-mono font-black text-cyan-400">{placar.j1}</p>
+        </div>
+        <div className="text-4xl font-mono text-gray-600">·</div>
+        <div className="text-center">
+          <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Jogador 2</p>
+          <p className="text-7xl font-mono font-black text-pink-400">{placar.j2}</p>
         </div>
       </div>
 
-      {/* A Tela do Jogo */}
-      {/* 800px de largura por 600px de altura, com position relative para as raquetes absolutas */}
-      <div className="relative w-[800px] h-[600px] bg-black border-4 border-white rounded shadow-2xl overflow-hidden">
-        {/* Linha do meio pontilhada */}
-        <div className="absolute top-0 bottom-0 left-1/2 w-2 bg-transparent border-l-4 border-dashed border-white transform -translate-x-1/2"></div>
-
-        {/* Raquete Jogador 1 (Esquerda) */}
-        <div
-          className="absolute left-4 w-4 h-24 bg-white rounded-sm transition-all duration-75"
-          style={{ top: `${posJ1}px` }}
-        ></div>
-
-        {/* Raquete Jogador 2 (Direita) */}
-        <div
-          className="absolute right-4 w-4 h-24 bg-white rounded-sm transition-all duration-75"
-          style={{ top: `${posJ2}px` }}
-        ></div>
+      {/* ── Canvas do Jogo ────────────────────────────────────── */}
+      <div className="flex justify-center">
+        <PongCanvas gameState={gameState} placar={placar} />
       </div>
+
+      {/* ── Gráficos Chart.js ─────────────────────────────────── */}
+      <MetricsChart
+        gameState={gameState}
+        msgCount={msgCount}
+        mqttLogs={mqttLogs}
+      />
+
+      {/* ── Log MQTT + Chat ───────────────────────────────────── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <MqttLog logs={mqttLogs} />
+        <ChatPanel msgs={chatMsgs} publish={publish} />
+      </div>
+
+      {/* ── Tabela de tópicos (para apresentação/README) ─────── */}
+      <div className="bg-gray-900 border border-gray-700 rounded-lg p-4">
+        <p className="text-xs text-gray-400 uppercase tracking-wider font-bold mb-3">
+          Tópicos MQTT Ativos
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs font-mono">
+            <thead>
+              <tr className="border-b border-gray-700">
+                <th className="text-left text-gray-500 pb-2 pr-4">Tópico</th>
+                <th className="text-left text-gray-500 pb-2 pr-4">QoS</th>
+                <th className="text-left text-gray-500 pb-2 pr-4">Publica</th>
+                <th className="text-left text-gray-500 pb-2">Assina</th>
+              </tr>
+            </thead>
+            <tbody className="space-y-1">
+              {[
+                ["pong/sala1/jogador1/movimento", "0", "ESP32",    "Backend, Front"],
+                ["pong/sala1/jogador2/movimento", "0", "ESP32",    "Backend, Front"],
+                ["pong/+/+/movimento (wildcard)", "0", "ESP32",    "Backend, Front"],
+                ["pong/sala1/estado",             "0", "Backend",  "Front"],
+                ["pong/sala1/placar",             "1", "Backend",  "Front"],
+                ["pong/sala1/status",             "1", "ESP32/Back","Front (retained)"],
+                ["pong/sala1/chat",               "1", "Front/Back","Front"],
+                ["pong/sala1/comandos",           "1", "Front/ESP32","Backend, ESP32"],
+              ].map(([tpc, qos, pub, sub]) => (
+                <tr key={tpc} className="border-b border-gray-800">
+                  <td className={`py-1 pr-4 ${tpc.includes("+") ? "text-purple-400" : "text-cyan-300"}`}>
+                    {tpc}
+                  </td>
+                  <td className={`py-1 pr-4 font-bold ${
+                    qos === "0" ? "text-gray-400" :
+                    qos === "1" ? "text-yellow-400" : "text-red-400"
+                  }`}>{qos}</td>
+                  <td className="py-1 pr-4 text-gray-400">{pub}</td>
+                  <td className="py-1 text-gray-400">{sub}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Footer ───────────────────────────────────────────── */}
+      <footer className="text-center text-gray-700 text-xs pb-2">
+        Pong MQTT · React + FastAPI + ESP32 · HiveMQ Cloud
+      </footer>
     </div>
   );
 }
-
-export default App;
