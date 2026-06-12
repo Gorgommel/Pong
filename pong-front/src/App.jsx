@@ -23,7 +23,9 @@ import MqttLog          from "./components/MqttLog";
 import ChatPanel        from "./components/ChatPanel";
 
 // Trocar para wss:// + host HiveMQ Cloud em produção
-const BROKER_URL = "ws://broker.hivemq.com:8000/mqtt";
+const BROKER_URL =
+  import.meta.env.VITE_BROKER_URL ??
+  "wss://3e87dd33d5184c218a8534b6a63bce96.s1.eu.hivemq.cloud:8884/mqtt";
 
 export default function App() {
   const {
@@ -43,8 +45,8 @@ export default function App() {
           <p className="text-gray-500 text-xs">Multiplayer Distribuído via HiveMQ</p>
         </div>
         <div className="text-right text-xs text-gray-600 font-mono">
-          <p>broker.hivemq.com</p>
-          <p>ws port 8000</p>
+          <p>{new URL(BROKER_URL).hostname}</p>
+          <p>wss port 8884</p>
         </div>
       </header>
 
@@ -110,6 +112,7 @@ export default function App() {
                 ["pong/sala1/estado",             "0", "Backend",  "Front"],
                 ["pong/sala1/placar",             "1", "Backend",  "Front"],
                 ["pong/sala1/status",             "1", "ESP32/Back","Front (retained)"],
+                ["pong/sala1/estado_critico",     "2", "Backend",  "Front (retained)"],
                 ["pong/sala1/chat",               "1", "Front/Back","Front"],
                 ["pong/sala1/comandos",           "1", "Front/ESP32","Backend, ESP32"],
               ].map(([tpc, qos, pub, sub]) => (

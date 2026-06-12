@@ -25,13 +25,18 @@ import logging
 import math
 import os
 import random
+import ssl
 import time
 from dataclasses import asdict, dataclass, field
 from threading import Lock
 
 import paho.mqtt.client as mqtt
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+
+# Localmente, le pong-back/.env. No Render, use Environment Variables.
+load_dotenv()
 
 # ──────────────────────────────────────────────────────────────
 #  Logging
@@ -43,10 +48,11 @@ log = logging.getLogger("pong-backend")
 # ──────────────────────────────────────────────────────────────
 #  Configurações (via variáveis de ambiente para deploy)
 # ──────────────────────────────────────────────────────────────
-MQTT_HOST  = os.getenv("MQTT_HOST",  "broker.hivemq.com")
-MQTT_PORT  = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_HOST  = os.getenv("MQTT_HOST",  "3e87dd33d5184c218a8534b6a63bce96.s1.eu.hivemq.cloud")
+MQTT_PORT  = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_USER  = os.getenv("MQTT_USER",  "")
 MQTT_PASS  = os.getenv("MQTT_PASS",  "")
+MQTT_TLS   = os.getenv("MQTT_TLS", "true").lower() in ("1", "true", "yes", "on")
 
 # Sala padrão
 DEFAULT_SALA = "sala1"
@@ -123,6 +129,10 @@ def make_mqtt_client() -> mqtt.Client:
 
     if MQTT_USER:
         client.username_pw_set(MQTT_USER, MQTT_PASS)
+    # HiveMQ Cloud usa TLS na porta 8883. Para teste com Mosquitto local,
+    # coloque MQTT_TLS=false e MQTT_PORT=1883 no .env.
+    if MQTT_TLS:
+        client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
 
     # ── LWT ──────────────────────────────────────────────────
     # Se a conexão cair, o broker publica este status automaticamente
@@ -168,6 +178,8 @@ def on_connect(client, userdata, flags, rc):
 
     # Assina chat
     client.subscribe(t(DEFAULT_SALA, "chat"), qos=1)
+    # QoS 2 fica reservado para eventos criticos e raros da partida.
+    client.subscribe(t(DEFAULT_SALA, "estado_critico"), qos=2)
 
     log.info(f"[MQTT] Tópicos ativos:\n"
              f"  pong/+/+/movimento  (wildcard, QoS 0)\n"
@@ -231,8 +243,10 @@ def on_message(client, userdata, msg):
                 game.score_j1 = 0
                 game.score_j2 = 0
                 _reset_ball_unsafe()
+                _publish_estado_critico(client, "partida_iniciada")
             elif cmd == "RESET_BALL":
                 _reset_ball_unsafe()
+                _publish_estado_critico(client, "bola_reiniciada")
 
         # ── Chat ───────────────────────────────────────────────
         elif topic == t(DEFAULT_SALA, "chat"):
@@ -336,7 +350,25 @@ def _publish_placar(client: mqtt.Client, gol_de: str):
     })
     # QoS 1: broker confirma entrega ao menos uma vez
     client.publish(t(DEFAULT_SALA, "placar"), payload, qos=1)
+    _publish_estado_critico(client, "gol")
     log.info(f"[PLACAR] Gol de {gol_de}! {game.score_j1} x {game.score_j2}")
+
+
+def _publish_estado_critico(client: mqtt.Client, evento: str):
+    """Publica eventos importantes com QoS 2 e retained.
+
+    Movimentos e estado visual usam QoS 0 porque sao frequentes. Ja eventos
+    como gol, inicio e reset sao raros e importantes para auditoria/apresentacao,
+    por isso usam QoS 2. O retained ajuda quem abrir a interface depois a ver
+    o ultimo evento critico imediatamente.
+    """
+    payload = json.dumps({
+        "evento": evento,
+        "running": game.running,
+        "score": {"j1": game.score_j1, "j2": game.score_j2},
+        "ts": int(time.time() * 1000),
+    })
+    client.publish(t(DEFAULT_SALA, "estado_critico"), payload, qos=2, retain=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -425,7 +457,9 @@ async def startup():
     _loop = asyncio.get_event_loop()
 
     mqtt_client = make_mqtt_client()
-    mqtt_client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=60)
+    # Faz a primeira conexao antes de liberar o servidor HTTP. Isso permite
+    # que /health indique corretamente se o backend chegou ao HiveMQ Cloud.
+    mqtt_client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
     mqtt_client.loop_start()
 
     asyncio.create_task(ball_loop(mqtt_client))

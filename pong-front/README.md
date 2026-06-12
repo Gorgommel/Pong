@@ -155,10 +155,11 @@ Permite que o backend escale para múltiplas salas simultâneas sem reconfigurar
 ### Variáveis de ambiente (backend)
 
 ```env
-MQTT_HOST=xxxx.s1.eu.hivemq.cloud
+MQTT_HOST=seu-cluster.s1.eu.hivemq.cloud
 MQTT_PORT=8883
-MQTT_USER=seu_usuario
-MQTT_PASS=sua_senha
+MQTT_USER=seu_usuario_hivemq
+MQTT_PASS=sua_senha_hivemq
+MQTT_TLS=true
 ```
 
 ---
@@ -419,9 +420,9 @@ npm run dev
 3. Vá em **Access Management** → **Credentials** → **Add credential**
    - Username: `pong_user`
    - Password: (gerada automaticamente)
-4. Anote o **Cluster URL** (ex: `abc123.s1.eu.hivemq.cloud`)
+4. Anote o **Cluster URL** (ex: `3e87dd33d5184c218a8534b6a63bce96.s1.eu.hivemq.cloud`)
 5. Atualize `.env` do backend e variáveis do ESP32
-6. Para o front, use `wss://abc123.s1.eu.hivemq.cloud:8884/mqtt`
+6. Para o front, use `3e87dd33d5184c218a8534b6a63bce96.s1.eu.hivemq.cloud:8884/mqtt`
 
 ---
 

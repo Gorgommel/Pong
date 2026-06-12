@@ -18,6 +18,7 @@ export const TOPICS = {
   MOV_J1:   `pong/${SALA}/jogador1/movimento`,
   MOV_J2:   `pong/${SALA}/jogador2/movimento`,
   ESTADO:   `pong/${SALA}/estado`,
+  ESTADO_CRITICO: `pong/${SALA}/estado_critico`,
   PLACAR:   `pong/${SALA}/placar`,
   STATUS:   `pong/${SALA}/status`,
   CHAT:     `pong/${SALA}/chat`,
@@ -28,7 +29,9 @@ export const TOPICS = {
 
 const MAX_LOGS = 100;
 
-export function useMqtt(brokerUrl = "ws://broker.hivemq.com:8000/mqtt") {
+export function useMqtt(
+  brokerUrl = "wss://3e87dd33d5184c218a8534b6a63bce96.s1.eu.hivemq.cloud:8884/mqtt"
+) {
   const clientRef = useRef(null);
   const [connected, setConnected]   = useState(false);
   const [gameState, setGameState]   = useState({
@@ -60,6 +63,9 @@ export function useMqtt(brokerUrl = "ws://broker.hivemq.com:8000/mqtt") {
       clientId: `PongFront_${Math.random().toString(36).slice(2, 8)}`,
       clean:    true,
       reconnectPeriod: 3000,
+      // No Vercel, estas variaveis sao definidas em Environment Variables.
+      username: import.meta.env.VITE_MQTT_USER,
+      password: import.meta.env.VITE_MQTT_PASS,
     });
     clientRef.current = client;
 
@@ -75,6 +81,7 @@ export function useMqtt(brokerUrl = "ws://broker.hivemq.com:8000/mqtt") {
       client.subscribe(TOPICS.ESTADO,   { qos: 0 });   // posição bolinha, alta freq
       client.subscribe(TOPICS.PLACAR,   { qos: 1 });   // placar: garante entrega
       client.subscribe(TOPICS.STATUS,   { qos: 1 });   // LWT/online: garante entrega
+      client.subscribe(TOPICS.ESTADO_CRITICO, { qos: 2 }); // eventos importantes
       client.subscribe(TOPICS.CHAT,     { qos: 1 });   // chat: garante entrega
       client.subscribe(TOPICS.COMANDOS, { qos: 1 });   // comandos: garante entrega
     });
@@ -126,6 +133,11 @@ export function useMqtt(brokerUrl = "ws://broker.hivemq.com:8000/mqtt") {
       else if (topic.endsWith("/status")) {
         const st = payload.status === "online" ? "Online ⚡" : "Offline 🔴";
         setEspStatus(`${payload.device ?? "ESP32"} ${st}`);
+      }
+      else if (topic.endsWith("/estado_critico")) {
+        // O backend publica este evento com QoS 2 e retained.
+        setLastCmd(`Evento critico: ${payload.evento ?? "atualizacao"}`);
+        setTimeout(() => setLastCmd(""), 2500);
       }
       else if (topic.endsWith("/chat")) {
         setChatMsgs(prev => [...prev, {

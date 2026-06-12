@@ -26,8 +26,10 @@
  */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include "secrets.h"  // Credenciais locais; este arquivo nao vai para o Git.
 
 // ============================================================
 //  Pinos
@@ -64,12 +66,7 @@ const char* WIFI_PASSWORD = "";
 //  MQTT — HiveMQ Cloud
 //  Troque para suas credenciais HiveMQ Cloud
 // ============================================================
-const char* MQTT_HOST     = "broker.hivemq.com";   // broker público (dev)
-// Para HiveMQ Cloud use: "xxxx.s1.eu.hivemq.cloud"
-const int   MQTT_PORT     = 1883;
-// const int MQTT_PORT_TLS = 8883;   // TLS em produção
-const char* MQTT_USER     = "";   // usuário HiveMQ Cloud
-const char* MQTT_PASS     = "";   // senha HiveMQ Cloud
+// MQTT_HOST, MQTT_PORT, MQTT_USER e MQTT_PASS ficam em secrets.h.
 
 // ============================================================
 //  Sala fixa (poderia vir de EEPROM ou config)
@@ -105,7 +102,7 @@ void buildTopics() {
 // ============================================================
 //  MQTT client
 // ============================================================
-WiFiClient   espClient;
+WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 
 // ============================================================
@@ -333,6 +330,9 @@ void setup() {
   digitalWrite(LED_GRN, LOW);
 
   setupWifi();
+  // Para demonstracao, aceita o certificado TLS sem armazenar a CA.
+  // Em producao, use espClient.setCACert(...) para validar o servidor.
+  espClient.setInsecure();
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
   randomSeed(analogRead(0));
