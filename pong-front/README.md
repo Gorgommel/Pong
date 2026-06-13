@@ -57,10 +57,12 @@ Dois jogadores controlam raquetes usando potenciômetros em um ESP32 físico. O 
 |---|---|---|---|---|---|
 | `pong/sala1/jogador1/movimento` | 0 | ❌ | ESP32 | Backend, Front | Posição Y da raquete J1 (alta frequência) |
 | `pong/sala1/jogador2/movimento` | 0 | ❌ | ESP32 | Backend, Front | Posição Y da raquete J2 (alta frequência) |
-| `pong/+/+/movimento` *(wildcard)* | 0 | ❌ | — | Backend, Front | Captura movimentos de qualquer sala/jogador |
+| `pong/+/+/movimento` *(wildcard global)* | 0 | ❌ | — | Backend | Captura movimentos de qualquer sala/jogador |
+| `pong/sala1/+/movimento` *(wildcard restrito)* | 0 | ❌ | — | Front | Captura movimentos dos jogadores da sala1 |
 | `pong/sala1/estado` | 0 | ❌ | Backend | Front | Posição da bolinha + raquetes (~30 FPS) |
 | `pong/sala1/placar` | 1 | ❌ | Backend | Front | Placar após cada gol (entrega garantida) |
-| `pong/sala1/status` | 1 | ✅ | ESP32 / Backend | Front | Status online/offline (LWT + retained) |
+| `pong/sala1/status/+` | 1 | ✅ | ESP32 / Backend | Front | Status separado por dispositivo (LWT + retained) |
+| `pong/sala1/estado_critico` | 2 | ✅ | Backend | Front | Último evento crítico da partida |
 | `pong/sala1/chat` | 1 | ❌ | Front / Back | Front, Backend | Mensagens de chat entre jogadores |
 | `pong/sala1/comandos` | 1 | ❌ | Front / ESP32 | Backend, ESP32 | READY, RESET_BALL |
 
@@ -82,7 +84,7 @@ pong/+/+/movimento
 ### Onde é usado
 
 - **Backend Python** assina `pong/+/+/movimento` — captura movimentos de todas as salas e jogadores com uma única assinatura.
-- **Front-end React** faz o mesmo via MQTT.js.
+- **Front-end React** assina `pong/sala1/+/movimento`, limitado à sala autorizada.
 
 ### Por que é necessário
 
@@ -96,7 +98,7 @@ Permite que o backend escale para múltiplas salas simultâneas sem reconfigurar
 |---|---|---|
 | **QoS 0** (at most once) | `movimento`, `estado` | Alta frequência (~20–30 msgs/s). Perda de um frame é imperceptível. Overhead mínimo — sem ACK nem retransmissão. Latência mais baixa. |
 | **QoS 1** (at least once) | `placar`, `status`, `chat`, `comandos` | Eventos importantes que não podem ser perdidos. O placar errado ou um READY ignorado quebraria o jogo. Aceita entrega duplicada (idempotente). |
-| **QoS 2** (exactly once) | *não utilizado* | Reservado para transações financeiras ou médicas. Overhead de 4 handshakes não justificado em jogo. |
+| **QoS 2** (exactly once) | Estado crítico | Eventos raros como início, reinício e gol; demonstra exactly-once sem sobrecarregar movimentos. |
 
 ---
 
@@ -109,7 +111,7 @@ Permite que o backend escale para múltiplas salas simultâneas sem reconfigurar
 **Como funciona:**
 1. No momento da conexão, o dispositivo registra no broker uma mensagem de "testamento".
 2. Se a conexão cair **inesperadamente** (sem `DISCONNECT` limpo), o broker publica automaticamente o LWT.
-3. O front-end recebe o status `offline` via tópico `pong/sala1/status`.
+3. O front-end recebe o status `offline` via tópico `pong/sala1/status/esp32`.
 
 **Payload LWT:**
 ```json
@@ -123,7 +125,7 @@ Permite que o backend escale para múltiplas salas simultâneas sem reconfigurar
 
 ### Retained Messages
 
-**Onde:** Tópico `pong/sala1/status`.
+**Onde:** Tópicos `pong/sala1/status/backend` e `pong/sala1/status/esp32`.
 
 **Como funciona:**
 - Quando o ESP32 ou Backend publica `status: online` com `retain=true`, o broker armazena a mensagem.
@@ -203,14 +205,14 @@ mosquitto_pub -h localhost \
   -m '{"y":250,"ts":1234567890}'
 
 # Terminal 3 — testar LWT
-mosquitto_sub -h localhost -t "pong/sala1/status" -v
+mosquitto_sub -h localhost -t "pong/sala1/status/#" -v
 
 # Terminal 4 — testar retained
 mosquitto_pub -h localhost \
-  -t "pong/sala1/status" \
+  -t "pong/sala1/status/esp32" \
   -m '{"status":"online","device":"esp32"}' \
   --retain
-mosquitto_sub -h localhost -t "pong/sala1/status"
+mosquitto_sub -h localhost -t "pong/sala1/status/#"
 # → recebe imediatamente a mensagem retida
 ```
 
@@ -250,9 +252,13 @@ Pot J1 (ADC)
 
 Botão J1 (pressionado)
   → {"comando":"READY","player":"jogador1"}
-  → pong/sala1/comandos  QoS 1
-  → resetBall() local
+  → pong/sala1/comandos
+  → backend autoritativo inicia/reinicia a partida
 ```
+
+> A biblioteca PubSubClient publica mensagens normais com QoS 0. O mesmo
+> tópico usa QoS 1 quando publicado pelo frontend/backend e ao ser assinado
+> pelo ESP32.
 
 ### Por que o ESP32 limita a 504px (não 600)?
 
@@ -320,7 +326,8 @@ FastAPI é escolhido porque o loop da bolinha precisa rodar como corrotina async
 pong/+/+/movimento  ← assina (QoS 0)  — recebe posições brutas
 pong/sala1/estado   → publica (QoS 0) — estado da bolinha ~30 FPS
 pong/sala1/placar   → publica (QoS 1) — placar após gol
-pong/sala1/status   → publica (QoS 1, retained) — heartbeat/LWT
+pong/sala1/status/backend → publica (QoS 1, retained) — heartbeat/LWT
+pong/sala1/estado_critico → publica (QoS 2, retained) — eventos críticos
 ```
 
 ### Interação com o Front

@@ -20,14 +20,19 @@ export const TOPICS = {
   ESTADO:   `pong/${SALA}/estado`,
   ESTADO_CRITICO: `pong/${SALA}/estado_critico`,
   PLACAR:   `pong/${SALA}/placar`,
-  STATUS:   `pong/${SALA}/status`,
+  STATUS_ALL: `pong/${SALA}/status/+`,
   CHAT:     `pong/${SALA}/chat`,
   COMANDOS: `pong/${SALA}/comandos`,
-  // Wildcard: captura movimentos de qualquer sala/jogador
-  MOV_ALL:  `pong/+/+/movimento`,
+  // Wildcard restrito à sala do frontend. O backend demonstra o wildcard global.
+  MOV_ALL:  `pong/${SALA}/+/movimento`,
 };
 
 const MAX_LOGS = 100;
+
+function finiteNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
 export function useMqtt(
   brokerUrl = "wss://3e87dd33d5184c218a8534b6a63bce96.s1.eu.hivemq.cloud:8884/mqtt"
@@ -80,7 +85,7 @@ export function useMqtt(
       // ── Demais tópicos ──────────────────────────────────────
       client.subscribe(TOPICS.ESTADO,   { qos: 0 });   // posição bolinha, alta freq
       client.subscribe(TOPICS.PLACAR,   { qos: 1 });   // placar: garante entrega
-      client.subscribe(TOPICS.STATUS,   { qos: 1 });   // LWT/online: garante entrega
+      client.subscribe(TOPICS.STATUS_ALL, { qos: 1 }); // status por dispositivo
       client.subscribe(TOPICS.ESTADO_CRITICO, { qos: 2 }); // eventos importantes
       client.subscribe(TOPICS.CHAT,     { qos: 1 });   // chat: garante entrega
       client.subscribe(TOPICS.COMANDOS, { qos: 1 });   // comandos: garante entrega
@@ -102,35 +107,38 @@ export function useMqtt(
       if (topic.endsWith("/movimento")) {
         const parts = topic.split("/");
         const jogador = parts[2];
-        const y = Math.max(0, Math.min(504, Number(payload.y)));
-        setGameState(s => ({
-          ...s,
-          pos_j1: jogador === "jogador1" ? y : s.pos_j1,
-          pos_j2: jogador === "jogador2" ? y : s.pos_j2,
-        }));
+        setGameState(s => {
+          const current = jogador === "jogador1" ? s.pos_j1 : s.pos_j2;
+          const y = Math.max(0, Math.min(504, finiteNumber(payload.y, current)));
+          return {
+            ...s,
+            pos_j1: jogador === "jogador1" ? y : s.pos_j1,
+            pos_j2: jogador === "jogador2" ? y : s.pos_j2,
+          };
+        });
       }
       else if (topic.endsWith("/estado")) {
         setGameState(s => ({
           ...s,
-          ball_x: Number(payload.bx ?? s.ball_x),
-          ball_y: Number(payload.by ?? s.ball_y),
-          vel_x:  Number(payload.vx ?? s.vel_x),
-          vel_y:  Number(payload.vy ?? s.vel_y),
-          pos_j1: payload.j1 !== undefined ? Number(payload.j1) : s.pos_j1,
-          pos_j2: payload.j2 !== undefined ? Number(payload.j2) : s.pos_j2,
+          ball_x: finiteNumber(payload.bx, s.ball_x),
+          ball_y: finiteNumber(payload.by, s.ball_y),
+          vel_x:  finiteNumber(payload.vx, s.vel_x),
+          vel_y:  finiteNumber(payload.vy, s.vel_y),
+          pos_j1: finiteNumber(payload.j1, s.pos_j1),
+          pos_j2: finiteNumber(payload.j2, s.pos_j2),
         }));
       }
       else if (topic.endsWith("/placar")) {
         setPlacar({
-          j1:       Number(payload.j1 ?? 0),
-          j2:       Number(payload.j2 ?? 0),
+          j1:       finiteNumber(payload.j1, 0),
+          j2:       finiteNumber(payload.j2, 0),
           lastGoal: payload.gol ?? "",
         });
         if (payload.gol) {
           setTimeout(() => setPlacar(p => ({ ...p, lastGoal: "" })), 3000);
         }
       }
-      else if (topic.endsWith("/status")) {
+      else if (topic.includes("/status/") && payload.device === "esp32") {
         const st = payload.status === "online" ? "Online ⚡" : "Offline 🔴";
         setEspStatus(`${payload.device ?? "ESP32"} ${st}`);
       }

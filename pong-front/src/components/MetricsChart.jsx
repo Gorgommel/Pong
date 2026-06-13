@@ -27,7 +27,7 @@ function makeTimeLabels(n) {
   return Array.from({ length: n }, (_, i) => `${-(n - 1 - i) * 50}ms`);
 }
 
-export default function MetricsChart({ gameState, msgCount, mqttLogs }) {
+export default function MetricsChart({ gameState, msgCount }) {
   const posChartRef    = useRef(null);
   const posChartInst   = useRef(null);
   const msgChartRef    = useRef(null);
@@ -56,7 +56,7 @@ export default function MetricsChart({ gameState, msgCount, mqttLogs }) {
     chart.data.datasets[0].data = [...histJ1.current];
     chart.data.datasets[1].data = [...histJ2.current];
     chart.update("none");
-  }, [gameState?.pos_j1, gameState?.pos_j2]); // Optional chaining prevenindo quebras extras
+  }, [gameState]);
 
   // CORREÇÃO 2: Trava de segurança no histórico de mensagens por segundo
   useEffect(() => {

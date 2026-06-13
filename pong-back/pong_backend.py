@@ -25,6 +25,7 @@ import logging
 import math
 import os
 import random
+import re
 import ssl
 import time
 from dataclasses import asdict, dataclass, field
@@ -32,7 +33,7 @@ from threading import Lock
 
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 # Localmente, le pong-back/.env. No Render, use Environment Variables.
@@ -53,6 +54,11 @@ MQTT_PORT  = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_USER  = os.getenv("MQTT_USER",  "")
 MQTT_PASS  = os.getenv("MQTT_PASS",  "")
 MQTT_TLS   = os.getenv("MQTT_TLS", "true").lower() in ("1", "true", "yes", "on")
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+]
 
 # Sala padrão
 DEFAULT_SALA = "sala1"
@@ -112,7 +118,7 @@ app = FastAPI(title="Pong MQTT Backend", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],    # restringir em produção
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -139,7 +145,7 @@ def make_mqtt_client() -> mqtt.Client:
     # QoS 1, retained=True → subscribers recebem mesmo depois da queda
     lwt_payload = json.dumps({"status": "offline", "device": "backend"})
     client.will_set(
-        t(DEFAULT_SALA, "status"),
+        t(DEFAULT_SALA, "status/backend"),
         payload=lwt_payload,
         qos=1,
         retain=True
@@ -162,7 +168,7 @@ def on_connect(client, userdata, flags, rc):
     # QoS 1, retained=True → qualquer front que se conectar depois
     # recebe imediatamente o status online
     client.publish(
-        t(DEFAULT_SALA, "status"),
+        t(DEFAULT_SALA, "status/backend"),
         json.dumps({"status": "online", "device": "backend"}),
         qos=1, retain=True
     )
@@ -218,7 +224,11 @@ def on_message(client, userdata, msg):
         if len(parts) == 4 and parts[3] == "movimento":
             sala    = parts[1]
             jogador = parts[2]   # "jogador1" ou "jogador2"
-            y_raw   = int(data.get("y", 0))
+            try:
+                y_raw = int(data.get("y", 0))
+            except (TypeError, ValueError):
+                log.warning("[MQTT] Movimento invalido em %s: %s", topic, payload)
+                return
             y       = max(PADDLE_MIN, min(PADDLE_MAX, y_raw))   # clamp
 
             ts = {"t": round(now * 1000), "y": y}
@@ -253,10 +263,11 @@ def on_message(client, userdata, msg):
             log.info(f"[CHAT] {data.get('player','?')}: {data.get('msg','')}")
 
     # Relay para WebSocket (fora do lock para não bloquear)
-    asyncio.run_coroutine_threadsafe(
-        ws_broadcast({"topic": topic, "payload": data}),
-        _loop
-    )
+    if _loop and not _loop.is_closed():
+        asyncio.run_coroutine_threadsafe(
+            ws_broadcast({"topic": topic, "payload": data}),
+            _loop
+        )
 
 
 def _reset_ball_unsafe():
@@ -424,23 +435,43 @@ def get_metricas():
 
 @app.post("/comando/{sala}/{comando}")
 def post_comando(sala: str, comando: str, player: str = "jogador1"):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", sala):
+        raise HTTPException(status_code=400, detail="Sala invalida")
+    if comando not in {"READY", "RESET_BALL"}:
+        raise HTTPException(status_code=400, detail="Comando nao permitido")
     """Publica comando MQTT a partir de requisição HTTP do front."""
     payload = json.dumps({"comando": comando, "player": player})
-    mqtt_client.publish(t(sala, "comandos"), payload, qos=1)
+    _publish_or_503(t(sala, "comandos"), payload, qos=1)
     return {"ok": True, "topic": t(sala, "comandos"), "payload": payload}
 
 
 @app.post("/chat")
 def post_chat(sala: str = DEFAULT_SALA, player: str = "jogador1", msg: str = ""):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", sala):
+        raise HTTPException(status_code=400, detail="Sala invalida")
+    if not msg.strip() or len(msg) > 280:
+        raise HTTPException(status_code=400, detail="Mensagem deve ter entre 1 e 280 caracteres")
     """Publica mensagem de chat via HTTP (o front também pode publicar direto)."""
     payload = json.dumps({"player": player, "msg": msg, "ts": int(time.time()*1000)})
-    mqtt_client.publish(t(sala, "chat"), payload, qos=1)
+    _publish_or_503(t(sala, "chat"), payload, qos=1)
     return {"ok": True}
+
+
+def _publish_or_503(topic: str, payload: str, qos: int):
+    """Publica via MQTT ou informa indisponibilidade para o cliente HTTP."""
+    if not mqtt_client or not mqtt_client.is_connected():
+        raise HTTPException(status_code=503, detail="Broker MQTT desconectado")
+    result = mqtt_client.publish(topic, payload, qos=qos)
+    if result.rc != mqtt.MQTT_ERR_SUCCESS:
+        raise HTTPException(status_code=503, detail="Falha ao publicar no broker MQTT")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "connected": mqtt_client.is_connected()}
+    return {
+        "status": "ok",
+        "mqtt_connected": bool(mqtt_client and mqtt_client.is_connected()),
+    }
 
 
 # ──────────────────────────────────────────────────────────────
@@ -459,7 +490,12 @@ async def startup():
     mqtt_client = make_mqtt_client()
     # Faz a primeira conexao antes de liberar o servidor HTTP. Isso permite
     # que /health indique corretamente se o backend chegou ao HiveMQ Cloud.
-    mqtt_client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+    try:
+        mqtt_client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+    except OSError as exc:
+        # Mantem /health e /docs disponiveis enquanto o MQTT reconecta.
+        log.error("[MQTT] Conexao inicial falhou: %s", exc)
+        mqtt_client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=60)
     mqtt_client.loop_start()
 
     asyncio.create_task(ball_loop(mqtt_client))
@@ -471,7 +507,7 @@ async def shutdown():
     if mqtt_client:
         # Publica offline antes de desligar (graceful shutdown)
         mqtt_client.publish(
-            t(DEFAULT_SALA, "status"),
+            t(DEFAULT_SALA, "status/backend"),
             json.dumps({"status": "offline", "device": "backend"}),
             qos=1, retain=True
         )

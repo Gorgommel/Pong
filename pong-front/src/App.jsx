@@ -80,7 +80,6 @@ export default function App() {
       <MetricsChart
         gameState={gameState}
         msgCount={msgCount}
-        mqttLogs={mqttLogs}
       />
 
       {/* ── Log MQTT + Chat ───────────────────────────────────── */}
@@ -108,10 +107,10 @@ export default function App() {
               {[
                 ["pong/sala1/jogador1/movimento", "0", "ESP32",    "Backend, Front"],
                 ["pong/sala1/jogador2/movimento", "0", "ESP32",    "Backend, Front"],
-                ["pong/+/+/movimento (wildcard)", "0", "ESP32",    "Backend, Front"],
+                ["pong/sala1/+/movimento (wildcard)", "0", "ESP32", "Front"],
                 ["pong/sala1/estado",             "0", "Backend",  "Front"],
                 ["pong/sala1/placar",             "1", "Backend",  "Front"],
-                ["pong/sala1/status",             "1", "ESP32/Back","Front (retained)"],
+                ["pong/sala1/status/+",           "1", "ESP32/Back","Front (retained)"],
                 ["pong/sala1/estado_critico",     "2", "Backend",  "Front (retained)"],
                 ["pong/sala1/chat",               "1", "Front/Back","Front"],
                 ["pong/sala1/comandos",           "1", "Front/ESP32","Backend, ESP32"],

@@ -8,8 +8,7 @@
  *    ✅ QoS diferenciados por tipo de mensagem
  *    ✅ Potenciômetro (raquete) + Botão (READY)
  *    ✅ Limitador de borda (clamp 0–504)
- *    ✅ Lógica completa da bolinha com colisões
- *    ✅ Publicação de placar e gol
+ *    ✅ Backend autoritativo para física e placar
  *    ✅ LED de status visual
  * ============================================================
  *
@@ -44,15 +43,8 @@ const int LED_GRN  = 33;
 // ============================================================
 //  Dimensões do canvas (espelha o front)
 // ============================================================
-const int CANVAS_W   = 800;
 const int CANVAS_H   = 600;
 const int PADDLE_H   = 96;
-const int PADDLE_W   = 16;
-// Borda direita da raquete J1: left-4 (16px) + largura(16px) = 32px
-const int PADDLE_X1R = 32;
-// Borda esquerda da raquete J2: right-4 (16px) do canvas = 800-16-16 = 768px
-const int PADDLE_X2L = CANVAS_W - PADDLE_W - 16;
-const int BALL_SIZE  = 14;
 const int PADDLE_MIN = 0;
 const int PADDLE_MAX = CANVAS_H - PADDLE_H;   // 504
 
@@ -83,18 +75,14 @@ const char* SALA = "sala1";
 // ============================================================
 char TOPIC_MOV_J1[40];    // pong/sala1/jogador1/movimento
 char TOPIC_MOV_J2[40];    // pong/sala1/jogador2/movimento
-char TOPIC_ESTADO[40];    // pong/sala1/estado
-char TOPIC_PLACAR[40];    // pong/sala1/placar
-char TOPIC_STATUS[40];    // pong/sala1/status
+char TOPIC_STATUS[48];    // pong/sala1/status/esp32
 char TOPIC_CHAT[40];      // pong/sala1/chat
 char TOPIC_CMDS[40];      // pong/sala1/comandos   (backend → ESP32)
 
 void buildTopics() {
   snprintf(TOPIC_MOV_J1, sizeof(TOPIC_MOV_J1), "pong/%s/jogador1/movimento", SALA);
   snprintf(TOPIC_MOV_J2, sizeof(TOPIC_MOV_J2), "pong/%s/jogador2/movimento", SALA);
-  snprintf(TOPIC_ESTADO, sizeof(TOPIC_ESTADO), "pong/%s/estado",              SALA);
-  snprintf(TOPIC_PLACAR, sizeof(TOPIC_PLACAR), "pong/%s/placar",              SALA);
-  snprintf(TOPIC_STATUS, sizeof(TOPIC_STATUS), "pong/%s/status",              SALA);
+  snprintf(TOPIC_STATUS, sizeof(TOPIC_STATUS), "pong/%s/status/esp32",        SALA);
   snprintf(TOPIC_CHAT,   sizeof(TOPIC_CHAT),   "pong/%s/chat",                SALA);
   snprintf(TOPIC_CMDS,   sizeof(TOPIC_CMDS),   "pong/%s/comandos",            SALA);
 }
@@ -111,33 +99,14 @@ PubSubClient mqtt(espClient);
 int   posJ1 = CANVAS_H / 2 - PADDLE_H / 2;
 int   posJ2 = CANVAS_H / 2 - PADDLE_H / 2;
 int   lastJ1 = -1, lastJ2 = -1;
-int   scoreJ1 = 0, scoreJ2 = 0;
-
-float ballX, ballY, velX, velY;
-const float SPEED_INIT = 5.0f;
-const float SPEED_MAX  = 12.0f;
-const float ACCEL      = 0.3f;
-
 unsigned long lastPaddlePub = 0;
-unsigned long lastBallTick  = 0;
 const int PADDLE_MS = 50;    // QoS 0, ~20 msg/s por raquete
-const int BALL_MS   = 33;    // ~30 FPS
 
 // ============================================================
 //  Utilitários
 // ============================================================
 int clamp(int v, int lo, int hi) {
   return v < lo ? lo : (v > hi ? hi : v);
-}
-
-void resetBall() {
-  ballX = CANVAS_W / 2.0f;
-  ballY = CANVAS_H / 2.0f;
-  float angle = random(30, 60) * (PI / 180.0f);
-  float dx = (random(0,2) == 0) ? 1 : -1;
-  float dy = (random(0,2) == 0) ? 1 : -1;
-  velX = dx * SPEED_INIT * cos(angle);
-  velY = dy * SPEED_INIT * sin(angle);
 }
 
 // ============================================================
@@ -196,8 +165,9 @@ void mqttReconnect() {
 // ============================================================
 void mqttCallback(char* topic, byte* payload, unsigned int len) {
   char buf[256];
-  strncpy(buf, (char*)payload, min(len, (unsigned int)255));
-  buf[len] = '\0';
+  unsigned int copiedLen = min(len, (unsigned int)(sizeof(buf) - 1));
+  memcpy(buf, payload, copiedLen);
+  buf[copiedLen] = '\0';
   Serial.printf("[MQTT] <- %s : %s\n", topic, buf);
 
   StaticJsonDocument<128> doc;
@@ -206,13 +176,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int len) {
   if (strcmp(topic, TOPIC_CMDS) == 0) {
     const char* cmd = doc["comando"];
     if (cmd && strcmp(cmd, "READY") == 0) {
-      resetBall();
-      scoreJ1 = 0;
-      scoreJ2 = 0;
-      Serial.println("[JOGO] Partida reiniciada por comando READY.");
+      Serial.println("[JOGO] Backend confirmou comando READY.");
     }
     if (cmd && strcmp(cmd, "RESET_BALL") == 0) {
-      resetBall();
+      Serial.println("[JOGO] Backend confirmou comando RESET_BALL.");
     }
   }
 }
@@ -229,90 +196,6 @@ void publishMovement(const char* topic, int y) {
   char buf[64];
   serializeJson(doc, buf);
   mqtt.publish(topic, buf, false);   // QoS 0, not retained
-}
-
-// Estado da bolinha — QoS 0 (alta frequência, perda aceitável)
-void publishBall() {
-  StaticJsonDocument<128> doc;
-  doc["bx"] = (int)ballX;
-  doc["by"] = (int)ballY;
-  doc["vx"] = (int)velX;
-  doc["vy"] = (int)velY;
-  char buf[128];
-  serializeJson(doc, buf);
-  mqtt.publish(TOPIC_ESTADO, buf, false);   // QoS 0
-}
-
-// Placar — QoS 1 (pelo menos uma entrega garantida)
-void publishPlacar(const char* golDe = nullptr) {
-  StaticJsonDocument<128> doc;
-  doc["j1"] = scoreJ1;
-  doc["j2"] = scoreJ2;
-  if (golDe) doc["gol"] = golDe;
-  char buf[128];
-  serializeJson(doc, buf);
-  // QoS 1: publish com retain=false, mas confirmação de entrega pelo broker
-  // PubSubClient não expõe QoS diretamente em publish; para QoS 1 usa-se
-  // o método de 5 argumentos onde o último é o qos (biblioteca v2.8+)
-  mqtt.publish(TOPIC_PLACAR, (uint8_t*)buf, strlen(buf), false);
-}
-
-// ============================================================
-//  Lógica da bolinha
-// ============================================================
-void tickBall() {
-  ballX += velX;
-  ballY += velY;
-
-  float h = BALL_SIZE / 2.0f;
-
-  // Bordas top/bottom
-  if (ballY - h <= 0)          { ballY = h;             velY =  abs(velY); }
-  if (ballY + h >= CANVAS_H)   { ballY = CANVAS_H - h;  velY = -abs(velY); }
-
-  // Raquete J1 (esquerda)
-  if (velX < 0 &&
-      ballX - h <= PADDLE_X1R &&
-      ballX > PADDLE_X1R - PADDLE_W - h &&
-      ballY + h >= posJ1 &&
-      ballY - h <= posJ1 + PADDLE_H)
-  {
-    ballX = PADDLE_X1R + h;
-    velX  = abs(velX);
-    float sp = sqrt(velX*velX + velY*velY);
-    if (sp < SPEED_MAX) { float f = 1.0f + ACCEL/sp; velX *= f; velY *= f; }
-  }
-
-  // Raquete J2 (direita)
-  if (velX > 0 &&
-      ballX + h >= PADDLE_X2L &&
-      ballX < PADDLE_X2L + PADDLE_W + h &&
-      ballY + h >= posJ2 &&
-      ballY - h <= posJ2 + PADDLE_H)
-  {
-    ballX = PADDLE_X2L - h;
-    velX  = -abs(velX);
-    float sp = sqrt(velX*velX + velY*velY);
-    if (sp < SPEED_MAX) { float f = 1.0f + ACCEL/sp; velX *= f; velY *= f; }
-  }
-
-  // Gol J2 (bola passou esquerda)
-  if (ballX - h < 0) {
-    scoreJ2++;
-    publishPlacar("jogador2");
-    resetBall();
-    return;
-  }
-
-  // Gol J1 (bola passou direita)
-  if (ballX + h > CANVAS_W) {
-    scoreJ1++;
-    publishPlacar("jogador1");
-    resetBall();
-    return;
-  }
-
-  publishBall();
 }
 
 // ============================================================
@@ -336,13 +219,9 @@ void setup() {
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
   randomSeed(analogRead(0));
-  resetBall();
-
   Serial.println("[SETUP] Pronto.");
   Serial.printf("[TOPICS] J1-mov : %s\n", TOPIC_MOV_J1);
   Serial.printf("[TOPICS] J2-mov : %s\n", TOPIC_MOV_J2);
-  Serial.printf("[TOPICS] estado : %s\n", TOPIC_ESTADO);
-  Serial.printf("[TOPICS] placar : %s\n", TOPIC_PLACAR);
   Serial.printf("[TOPICS] status : %s\n", TOPIC_STATUS);
 }
 
@@ -357,13 +236,11 @@ void loop() {
   if (digitalRead(BTN_J1) == LOW) {
     mqtt.publish(TOPIC_CMDS,
       "{\"comando\":\"READY\",\"player\":\"jogador1\"}", false);
-    resetBall(); scoreJ1 = 0; scoreJ2 = 0;
     delay(300);
   }
   if (digitalRead(BTN_J2) == LOW) {
     mqtt.publish(TOPIC_CMDS,
       "{\"comando\":\"READY\",\"player\":\"jogador2\"}", false);
-    resetBall(); scoreJ1 = 0; scoreJ2 = 0;
     delay(300);
   }
 
@@ -389,8 +266,5 @@ void loop() {
   }
 
   // ── Bolinha (~30 FPS) ─────────────────────────────────────
-  if (now - lastBallTick > BALL_MS) {
-    lastBallTick = now;
-    tickBall();
-  }
+  // A física e o placar são calculados somente pelo backend autoritativo.
 }

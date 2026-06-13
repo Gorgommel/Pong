@@ -35,8 +35,13 @@ ficam visiveis no navegador e, portanto, devem ter permissoes limitadas.
    - `MQTT_USER=<usuario exclusivo do backend>`
    - `MQTT_PASS=<senha>`
    - `MQTT_TLS=true`
+   - `CORS_ORIGINS=https://SEU-PROJETO.vercel.app`
 
 7. Depois do deploy, acesse `https://SEU-SERVICO.onrender.com/health`.
+
+Use somente **uma instancia/worker** do backend: o estado da partida fica em
+memoria. No plano gratuito, o Render pode suspender o serviço por inatividade,
+interrompendo a física do jogo até ele despertar novamente.
 
 ## Frontend no Vercel
 
