@@ -9,7 +9,7 @@ troca mensagens com um backend Python e uma interface React pelo HiveMQ Cloud.
 - Backend e Swagger: https://pong-mqtt-backend.onrender.com/docs
 - Saude do backend: https://pong-mqtt-backend.onrender.com/health
 - Repositorio publico: https://github.com/Gorgommel/Pong
-- Apresentacao: [`apresentacao/Pong-MQTT-Apresentacao.pptx`](apresentacao/Pong-MQTT-Apresentacao.pptx)
+- Apresentacao: [`apresentacao/Pong-MQTT-Apresentacao-Final.pptx`](apresentacao/Pong-MQTT-Apresentacao-Final.pptx)
 - Roteiro de fala: [`apresentacao/ROTEIRO.md`](apresentacao/ROTEIRO.md)
 
 ## Integrantes
