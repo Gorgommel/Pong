@@ -25,7 +25,7 @@ Dois jogadores controlam raquetes usando potenciômetros em um ESP32 físico. O 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                       HiveMQ Cloud Broker                        │
-│              (também testado com Mosquitto local)                 │
+│                 Broker principal: HiveMQ Cloud                    │
 └──────┬──────────────────────┬───────────────────────┬────────────┘
        │                      │                       │
        ▼                      ▼                       ▼
@@ -64,7 +64,7 @@ Dois jogadores controlam raquetes usando potenciômetros em um ESP32 físico. O 
 | `pong/sala1/status/+` | 1 | ✅ | ESP32 / Backend | Front | Status separado por dispositivo (LWT + retained) |
 | `pong/sala1/estado_critico` | 2 | ✅ | Backend | Front | Último evento crítico da partida |
 | `pong/sala1/chat` | 1 | ❌ | Front / Back | Front, Backend | Mensagens de chat entre jogadores |
-| `pong/sala1/comandos` | 1 | ❌ | Front / ESP32 | Backend, ESP32 | READY, RESET_BALL |
+| `pong/sala1/comandos` | 1 | ❌ | Front / ESP32 | Backend, ESP32 | READY, PAUSE, RESUME, RESET_BALL e EXIT |
 
 ---
 
@@ -163,60 +163,6 @@ MQTT_USER=seu_usuario_hivemq
 MQTT_PASS=sua_senha_hivemq
 MQTT_TLS=true
 ```
-
----
-
-## 🦟 Teste com Broker Local (Mosquitto)
-
-### Instalação
-
-```bash
-# Ubuntu/Debian
-sudo apt install mosquitto mosquitto-clients
-
-# macOS
-brew install mosquitto
-```
-
-### Configuração mínima (`/etc/mosquitto/mosquitto.conf`)
-
-```conf
-listener 1883
-allow_anonymous true
-```
-
-### Executar
-
-```bash
-sudo systemctl start mosquitto
-# ou
-mosquitto -c /etc/mosquitto/mosquitto.conf -v
-```
-
-### Gerar evidências para o README
-
-```bash
-# Terminal 1 — assinar (wildcard)
-mosquitto_sub -h localhost -t "pong/+/+/movimento" -v
-
-# Terminal 2 — publicar movimento simulado
-mosquitto_pub -h localhost \
-  -t "pong/sala1/jogador1/movimento" \
-  -m '{"y":250,"ts":1234567890}'
-
-# Terminal 3 — testar LWT
-mosquitto_sub -h localhost -t "pong/sala1/status/#" -v
-
-# Terminal 4 — testar retained
-mosquitto_pub -h localhost \
-  -t "pong/sala1/status/esp32" \
-  -m '{"status":"online","device":"esp32"}' \
-  --retain
-mosquitto_sub -h localhost -t "pong/sala1/status/#"
-# → recebe imediatamente a mensagem retida
-```
-
-**Tirar print dos terminais e anexar ao README como evidência.**
 
 ---
 
@@ -387,7 +333,6 @@ Fluxo: ESP32 → Broker → Backend → Broker → Front
 
 - Node.js 20+
 - Python 3.11+
-- Mosquitto (para testes locais)
 
 ### Backend
 
@@ -443,24 +388,14 @@ npm run dev
 
 ---
 
-## 🦟 Evidência do Teste com Mosquitto
-
-> **[INSERIR PRINT 1]** — Terminal com `mosquitto_sub -t "pong/+/+/movimento" -v` recebendo mensagens
-
-> **[INSERIR PRINT 2]** — Terminal com `mosquitto_pub` publicando movimento simulado
-
-> **[INSERIR PRINT 3]** — Teste de retained message: novo subscriber recebe status imediatamente
-
----
-
 ## 🔗 Links
 
 | Recurso | URL |
 |---|---|
-| Aplicação (Vercel) | https://pong-mqtt.vercel.app *(atualizar após deploy)* |
-| Backend API (Render) | https://pong-backend.onrender.com *(atualizar após deploy)* |
+| Aplicação (Vercel) | https://pong-front.vercel.app/ |
+| Backend API (Render) | https://pong-mqtt-backend.onrender.com/ |
 | Simulação Wokwi | https://wokwi.com/projects/466358821549721601 |
-| Repositório GitHub | https://github.com/... *(atualizar)* |
+| Repositório GitHub | https://github.com/Gorgommel/Pong |
 
 ---
 
@@ -476,7 +411,6 @@ npm run dev
 | Retained Messages (status online) | ✅ |
 | Last Will and Testament (ESP32 + Backend) | ✅ |
 | HiveMQ Cloud | ✅ |
-| Teste documentado com Mosquitto local | ✅ |
 | ESP32 físico com potenciômetro e botão | ✅ |
 | Limitador de borda (clamp 0–504px) | ✅ |
 | Interface Web com Pong funcionando | ✅ |
@@ -492,9 +426,8 @@ npm run dev
 | Wildcard no backend Python | ✅ |
 | Lógica de jogo centralizada no backend | ✅ |
 | REST API + WebSocket relay | ✅ |
-| Deploy Vercel (frontend) | ✅ instruções |
-| Deploy Render (backend) | ✅ instruções |
+| Deploy Vercel (frontend) | ✅ https://pong-front.vercel.app/ |
+| Deploy Render (backend) | ✅ https://pong-mqtt-backend.onrender.com/ |
 | README completo | ✅ este arquivo |
-| GitHub público | 📋 criar e commitar |
+| GitHub público | ✅ https://github.com/Gorgommel/Pong |
 | Fotos do ESP32 | 📋 tirar e inserir |
-| Print do Mosquitto | 📋 executar e inserir |
