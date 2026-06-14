@@ -16,12 +16,11 @@ troca mensagens com um backend Python e uma interface React pelo HiveMQ Cloud.
 
 > Preencher antes da entrega: nome completo e RA de todos os integrantes.
 
-| Nome completo | RA |
-|---|---|
-| Isaac - completar sobrenome | completar |
-| Isaac - completar sobrenome | completar |
-| Isaac - completar sobrenome | completar |
-| Isaac - completar sobrenome | completar |
+
+| Amanda Lima Gonçalves Martins| Developer |
+| Heloisa Silva Lino | Developer |
+| Igor Filipi | Devoloper |
+| Isaac -Silva Morais | Developer |
 
 ## Tema escolhido
 
