@@ -28,6 +28,8 @@ export const TOPICS = {
 };
 
 const MAX_LOGS = 100;
+const VALID_COMMANDS = new Set(["READY", "PAUSE", "RESUME", "RESET_BALL", "EXIT"]);
+const VALID_PLAYERS = new Set(["jogador1", "jogador2"]);
 
 function finiteNumber(value, fallback) {
   const parsed = Number(value);
@@ -51,6 +53,8 @@ export function useMqtt(
   const [chatMsgs, setChatMsgs]     = useState([]);
   const [lastCmd, setLastCmd]       = useState("");
   const [msgCount, setMsgCount]     = useState(0);
+  const [gamePhase, setGamePhase]   = useState("aguardando");
+  const [uiError, setUiError]       = useState("");
 
   const addLog = useCallback((topic, payload) => {
     const entry = {
@@ -76,6 +80,7 @@ export function useMqtt(
 
     client.on("connect", () => {
       setConnected(true);
+      setUiError("");
 
       // ── Assinatura com wildcard (QoS 0) ────────────────────
       // Captura movimentos de QUALQUER sala e jogador
@@ -91,14 +96,24 @@ export function useMqtt(
       client.subscribe(TOPICS.COMANDOS, { qos: 1 });   // comandos: garante entrega
     });
 
-    client.on("error",      () => setConnected(false));
+    client.on("error",      (error) => {
+      setConnected(false);
+      setUiError(`Falha MQTT: ${error.message}`);
+    });
     client.on("close",      () => setConnected(false));
     client.on("disconnect", () => setConnected(false));
 
     client.on("message", (topic, message) => {
       let payload;
       try { payload = JSON.parse(message.toString()); }
-      catch { return; }
+      catch {
+        setUiError(`Payload JSON inválido recebido em ${topic}.`);
+        return;
+      }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        setUiError(`Payload inválido recebido em ${topic}.`);
+        return;
+      }
 
       addLog(topic, payload);
 
@@ -139,12 +154,14 @@ export function useMqtt(
         }
       }
       else if (topic.includes("/status/") && payload.device === "esp32") {
+        if (!["online", "offline"].includes(payload.status)) return;
         const st = payload.status === "online" ? "Online ⚡" : "Offline 🔴";
         setEspStatus(`${payload.device ?? "ESP32"} ${st}`);
       }
       else if (topic.endsWith("/estado_critico")) {
         // O backend publica este evento com QoS 2 e retained.
         setLastCmd(`Evento critico: ${payload.evento ?? "atualizacao"}`);
+        if (typeof payload.phase === "string") setGamePhase(payload.phase);
         setTimeout(() => setLastCmd(""), 2500);
       }
       else if (topic.endsWith("/chat")) {
@@ -156,6 +173,8 @@ export function useMqtt(
         }].slice(-50));
       }
       else if (topic.endsWith("/comandos")) {
+        if (!VALID_COMMANDS.has(String(payload.comando ?? "").toUpperCase())
+            || !VALID_PLAYERS.has(payload.player)) return;
         const label = payload.player === "jogador1" ? "Jogador 1" : "Jogador 2";
         setLastCmd(`${label}: ${payload.comando}`);
         setTimeout(() => setLastCmd(""), 2500);
@@ -168,14 +187,45 @@ export function useMqtt(
   // Publicar comando (READY, RESET_BALL, etc.)
   const publish = useCallback((topicKey, data, qos = 1) => {
     const client = clientRef.current;
-    if (!client?.connected) return;
+    if (!client?.connected) {
+      setUiError("Broker MQTT desconectado.");
+      return { ok: false, error: "Broker MQTT desconectado." };
+    }
     const topic = TOPICS[topicKey] ?? topicKey;
+    if (!Object.values(TOPICS).includes(topic)) {
+      setUiError("Tópico não permitido.");
+      return { ok: false, error: "Tópico não permitido." };
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      setUiError("Payload inválido.");
+      return { ok: false, error: "Payload inválido." };
+    }
+    if (topic === TOPICS.COMANDOS) {
+      const command = String(data.comando ?? "").toUpperCase();
+      if (!VALID_COMMANDS.has(command) || !VALID_PLAYERS.has(data.player)) {
+        setUiError("Comando ou jogador inválido.");
+        return { ok: false, error: "Comando ou jogador inválido." };
+      }
+      data = {
+        comando: command,
+        player: data.player,
+        command_id: `${Date.now()}-${crypto.randomUUID()}`,
+      };
+    }
+    if (topic === TOPICS.CHAT) {
+      const msg = typeof data.msg === "string" ? data.msg.trim() : "";
+      if (!VALID_PLAYERS.has(data.player) || !msg || msg.length > 280) {
+        setUiError("Mensagem inválida. Use entre 1 e 280 caracteres.");
+        return { ok: false, error: "Mensagem inválida." };
+      }
+      data = { player: data.player, msg };
+    }
     client.publish(topic, JSON.stringify(data), { qos });
     addLog(`↑ ${topic}`, data);
   }, [addLog]);
 
   return {
     connected, gameState, placar, espStatus,
-    mqttLogs, chatMsgs, lastCmd, msgCount, publish,
+    mqttLogs, chatMsgs, lastCmd, msgCount, gamePhase, uiError, publish,
   };
 }

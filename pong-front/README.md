@@ -414,7 +414,7 @@ npm run dev
 ### ESP32 (Wokwi)
 
 1. Abra https://wokwi.com/projects/466358821549721601
-2. Substitua o `.ino` pelo arquivo `pong-esp32/pong_esp32.ino`
+2. Substitua o `.ino` pelo arquivo `pong-esp32/pong-esp32.ino`
 3. Confirme as bibliotecas: `ArduinoJson`, `PubSubClient`
 4. Pressione ▶ Play
 

@@ -9,7 +9,7 @@ const BALL_SIZE = 14;
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
-export default function PongCanvas({ gameState, placar }) {
+export default function PongCanvas({ gameState, placar, gamePhase }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -69,7 +69,15 @@ export default function PongCanvas({ gameState, placar }) {
       ctx.textAlign = "center";
       ctx.fillText(`⚽ Gol de ${placar.lastGoal === "jogador1" ? "J1" : "J2"}!`, W / 2, H / 2);
     }
-  }, [gameState, placar]);
+    if (gamePhase === "pausado" || gamePhase === "encerrado") {
+      ctx.fillStyle = "rgba(0,0,0,0.65)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = gamePhase === "pausado" ? "#facc15" : "#f87171";
+      ctx.font = "bold 42px 'Courier New', monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(gamePhase === "pausado" ? "JOGO PAUSADO" : "PARTIDA ENCERRADA", W / 2, H / 2);
+    }
+  }, [gameState, placar, gamePhase]);
 
   return (
     <canvas

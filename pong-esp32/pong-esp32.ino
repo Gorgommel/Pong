@@ -51,9 +51,6 @@ const int PADDLE_MAX = CANVAS_H - PADDLE_H;   // 504
 // ============================================================
 //  Wi-Fi
 // ============================================================
-const char* WIFI_SSID     = "Wokwi-GUEST";   // trocar para rede real
-const char* WIFI_PASSWORD = "";
-
 // ============================================================
 //  MQTT — HiveMQ Cloud
 //  Troque para suas credenciais HiveMQ Cloud
@@ -181,6 +178,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int len) {
     if (cmd && strcmp(cmd, "RESET_BALL") == 0) {
       Serial.println("[JOGO] Backend confirmou comando RESET_BALL.");
     }
+    if (cmd && strcmp(cmd, "PAUSE") == 0) {
+      Serial.println("[JOGO] Partida pausada.");
+    }
+    if (cmd && strcmp(cmd, "RESUME") == 0) {
+      Serial.println("[JOGO] Partida retomada.");
+    }
+    if (cmd && strcmp(cmd, "EXIT") == 0) {
+      Serial.println("[JOGO] Partida encerrada.");
+    }
   }
 }
 
@@ -196,6 +202,16 @@ void publishMovement(const char* topic, int y) {
   char buf[64];
   serializeJson(doc, buf);
   mqtt.publish(topic, buf, false);   // QoS 0, not retained
+}
+
+void publishCommand(const char* command, const char* player) {
+  StaticJsonDocument<160> doc;
+  doc["comando"] = command;
+  doc["player"] = player;
+  doc["command_id"] = "esp32-" + String(millis());
+  char buf[160];
+  serializeJson(doc, buf);
+  mqtt.publish(TOPIC_CMDS, buf, false);
 }
 
 // ============================================================
@@ -234,13 +250,11 @@ void loop() {
 
   // ── Botões ────────────────────────────────────────────────
   if (digitalRead(BTN_J1) == LOW) {
-    mqtt.publish(TOPIC_CMDS,
-      "{\"comando\":\"READY\",\"player\":\"jogador1\"}", false);
+    publishCommand("READY", "jogador1");
     delay(300);
   }
   if (digitalRead(BTN_J2) == LOW) {
-    mqtt.publish(TOPIC_CMDS,
-      "{\"comando\":\"READY\",\"player\":\"jogador2\"}", false);
+    publishCommand("READY", "jogador2");
     delay(300);
   }
 

@@ -28,6 +28,7 @@ import random
 import re
 import ssl
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from threading import Lock
 
@@ -62,6 +63,10 @@ CORS_ORIGINS = [
 
 # Sala padrão
 DEFAULT_SALA = "sala1"
+VALID_PLAYERS = {"jogador1", "jogador2"}
+VALID_COMMANDS = {"READY", "PAUSE", "RESUME", "RESET_BALL", "EXIT"}
+MAX_CHAT_LENGTH = 280
+processed_command_ids: dict[str, float] = {}
 
 # Tópicos — hierarquia  pong/<sala>/...
 def t(sala: str, sufixo: str) -> str:
@@ -99,6 +104,7 @@ class GameState:
     score_j1: int   = 0
     score_j2: int   = 0
     running:  bool  = False
+    phase:    str   = "aguardando"
     msgs_received: int = 0
     msgs_per_sec:  float = 0.0
     last_msg_time: float = field(default_factory=time.time)
@@ -210,6 +216,10 @@ def on_message(client, userdata, msg):
         log.warning(f"[MQTT] Payload inválido em {topic}: {payload}")
         return
 
+    if not isinstance(data, dict):
+        log.warning("[MQTT] Payload deve ser um objeto JSON em %s", topic)
+        return
+
     with game_lock:
         game.msgs_received += 1
         now = time.time()
@@ -224,6 +234,9 @@ def on_message(client, userdata, msg):
         if len(parts) == 4 and parts[3] == "movimento":
             sala    = parts[1]
             jogador = parts[2]   # "jogador1" ou "jogador2"
+            if sala != DEFAULT_SALA or jogador not in VALID_PLAYERS:
+                log.warning("[MQTT] Movimento rejeitado no topico %s", topic)
+                return
             try:
                 y_raw = int(data.get("y", 0))
             except (TypeError, ValueError):
@@ -246,10 +259,35 @@ def on_message(client, userdata, msg):
 
         # ── Comandos ───────────────────────────────────────────
         elif topic == t(DEFAULT_SALA, "comandos"):
-            cmd = data.get("comando")
+            cmd = str(data.get("comando", "")).upper()
+            player = data.get("player")
+            command_id = str(data.get("command_id", "")).strip()
+            if cmd not in VALID_COMMANDS or player not in VALID_PLAYERS:
+                log.warning("[MQTT] Comando rejeitado: %s", payload)
+                return
+            now_monotonic = time.monotonic()
+            expired = [key for key, created in processed_command_ids.items()
+                       if now_monotonic - created > 60]
+            for key in expired:
+                processed_command_ids.pop(key, None)
+            if command_id and command_id in processed_command_ids:
+                log.info("[MQTT] Comando duplicado ignorado: %s", command_id)
+                return
+            if command_id:
+                processed_command_ids[command_id] = now_monotonic
+            if cmd == "PAUSE" and not game.running:
+                log.warning("[JOGO] PAUSE rejeitado: partida nao esta em andamento")
+                return
+            if cmd == "RESUME" and game.phase != "pausado":
+                log.warning("[JOGO] RESUME rejeitado: partida nao esta pausada")
+                return
+            if cmd == "RESET_BALL" and game.phase not in {"em_jogo", "pausado"}:
+                log.warning("[JOGO] RESET_BALL rejeitado: partida inativa")
+                return
             if cmd == "READY":
                 log.info("[JOGO] READY recebido — iniciando partida")
                 game.running  = True
+                game.phase = "em_jogo"
                 game.score_j1 = 0
                 game.score_j2 = 0
                 _reset_ball_unsafe()
@@ -257,10 +295,38 @@ def on_message(client, userdata, msg):
             elif cmd == "RESET_BALL":
                 _reset_ball_unsafe()
                 _publish_estado_critico(client, "bola_reiniciada")
+            elif cmd == "PAUSE":
+                game.running = False
+                game.phase = "pausado"
+                _publish_estado_critico(client, "partida_pausada")
+            elif cmd == "RESUME":
+                game.running = True
+                game.phase = "em_jogo"
+                _publish_estado_critico(client, "partida_retomada")
+            elif cmd == "EXIT":
+                game.running = False
+                game.phase = "encerrado"
+                game.score_j1 = 0
+                game.score_j2 = 0
+                game.ball_x = CANVAS_W / 2.0
+                game.ball_y = CANVAS_H / 2.0
+                _publish_estado_critico(client, "partida_encerrada")
 
         # ── Chat ───────────────────────────────────────────────
         elif topic == t(DEFAULT_SALA, "chat"):
-            log.info(f"[CHAT] {data.get('player','?')}: {data.get('msg','')}")
+            player = data.get("player")
+            chat_msg = data.get("msg")
+            if player not in VALID_PLAYERS or not isinstance(chat_msg, str):
+                log.warning("[CHAT] Mensagem rejeitada: %s", payload)
+                return
+            chat_msg = chat_msg.strip()
+            if not chat_msg or len(chat_msg) > MAX_CHAT_LENGTH:
+                log.warning("[CHAT] Tamanho de mensagem invalido")
+                return
+            if any(ord(char) < 32 or ord(char) == 127 for char in chat_msg):
+                log.warning("[CHAT] Caracter de controle rejeitado")
+                return
+            log.info("[CHAT] %s: %s", player, chat_msg)
 
     # Relay para WebSocket (fora do lock para não bloquear)
     if _loop and not _loop.is_closed():
@@ -347,6 +413,7 @@ async def ball_loop(client: mqtt.Client):
                 "bx": int(game.ball_x), "by": int(game.ball_y),
                 "vx": int(game.vel_x),  "vy": int(game.vel_y),
                 "j1": game.pos_j1,      "j2": game.pos_j2,
+                "running": game.running, "phase": game.phase,
             }
             client.publish(t(DEFAULT_SALA, "estado"),
                            json.dumps(estado), qos=0)
@@ -376,6 +443,7 @@ def _publish_estado_critico(client: mqtt.Client, evento: str):
     payload = json.dumps({
         "evento": evento,
         "running": game.running,
+        "phase": game.phase,
         "score": {"j1": game.score_j1, "j2": game.score_j2},
         "ts": int(time.time() * 1000),
     })
@@ -437,10 +505,17 @@ def get_metricas():
 def post_comando(sala: str, comando: str, player: str = "jogador1"):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", sala):
         raise HTTPException(status_code=400, detail="Sala invalida")
-    if comando not in {"READY", "RESET_BALL"}:
+    comando = comando.upper()
+    if comando not in VALID_COMMANDS:
         raise HTTPException(status_code=400, detail="Comando nao permitido")
+    if player not in VALID_PLAYERS:
+        raise HTTPException(status_code=400, detail="Jogador invalido")
     """Publica comando MQTT a partir de requisição HTTP do front."""
-    payload = json.dumps({"comando": comando, "player": player})
+    payload = json.dumps({
+        "comando": comando,
+        "player": player,
+        "command_id": uuid.uuid4().hex,
+    })
     _publish_or_503(t(sala, "comandos"), payload, qos=1)
     return {"ok": True, "topic": t(sala, "comandos"), "payload": payload}
 
@@ -449,8 +524,13 @@ def post_comando(sala: str, comando: str, player: str = "jogador1"):
 def post_chat(sala: str = DEFAULT_SALA, player: str = "jogador1", msg: str = ""):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", sala):
         raise HTTPException(status_code=400, detail="Sala invalida")
-    if not msg.strip() or len(msg) > 280:
+    if player not in VALID_PLAYERS:
+        raise HTTPException(status_code=400, detail="Jogador invalido")
+    msg = msg.strip()
+    if not msg or len(msg) > MAX_CHAT_LENGTH:
         raise HTTPException(status_code=400, detail="Mensagem deve ter entre 1 e 280 caracteres")
+    if any(ord(char) < 32 or ord(char) == 127 for char in msg):
+        raise HTTPException(status_code=400, detail="Mensagem contem caractere de controle")
     """Publica mensagem de chat via HTTP (o front também pode publicar direto)."""
     payload = json.dumps({"player": player, "msg": msg, "ts": int(time.time()*1000)})
     _publish_or_503(t(sala, "chat"), payload, qos=1)

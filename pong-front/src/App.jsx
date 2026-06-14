@@ -30,7 +30,7 @@ const BROKER_URL =
 export default function App() {
   const {
     connected, gameState, placar, espStatus,
-    mqttLogs, chatMsgs, lastCmd, msgCount, publish,
+    mqttLogs, chatMsgs, lastCmd, msgCount, gamePhase, uiError, publish,
   } = useMqtt(BROKER_URL);
 
   return (
@@ -55,6 +55,8 @@ export default function App() {
         connected={connected}
         espStatus={espStatus}
         lastCmd={lastCmd}
+        gamePhase={gamePhase}
+        uiError={uiError}
         publish={publish}
       />
 
@@ -73,7 +75,7 @@ export default function App() {
 
       {/* ── Canvas do Jogo ────────────────────────────────────── */}
       <div className="flex justify-center">
-        <PongCanvas gameState={gameState} placar={placar} />
+        <PongCanvas gameState={gameState} placar={placar} gamePhase={gamePhase} />
       </div>
 
       {/* ── Gráficos Chart.js ─────────────────────────────────── */}

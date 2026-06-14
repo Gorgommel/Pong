@@ -5,15 +5,31 @@
 import { useState } from "react";
 import { TOPICS } from "../hooks/useMqtt";
 
+function removeControlCharacters(value) {
+  return [...value].filter(char => {
+    const code = char.charCodeAt(0);
+    return code >= 32 && code !== 127;
+  }).join("");
+}
+
 export default function ChatPanel({ msgs, publish }) {
   const [input, setInput]   = useState("");
   const [player, setPlayer] = useState("jogador1");
+  const [error, setError] = useState("");
 
   const send = () => {
     const msg = input.trim();
-    if (!msg) return;
+    if (!msg) {
+      setError("Digite uma mensagem.");
+      return;
+    }
+    if (msg.length > 280) {
+      setError("A mensagem deve ter no máximo 280 caracteres.");
+      return;
+    }
     publish("CHAT", { player, msg });
     setInput("");
+    setError("");
   };
 
   return (
@@ -52,7 +68,8 @@ export default function ChatPanel({ msgs, publish }) {
                      placeholder-gray-500 focus:outline-none focus:border-cyan-500"
           placeholder="Mensagem..."
           value={input}
-          onChange={e => setInput(e.target.value)}
+          maxLength={280}
+          onChange={e => setInput(removeControlCharacters(e.target.value))}
           onKeyDown={e => e.key === "Enter" && send()}
         />
         <button
@@ -62,6 +79,10 @@ export default function ChatPanel({ msgs, publish }) {
         >
           Enviar
         </button>
+      </div>
+      <div className="px-3 pb-2 flex justify-between text-xs">
+        <span className="text-red-400">{error}</span>
+        <span className="text-gray-500">{input.length}/280</span>
       </div>
     </div>
   );
